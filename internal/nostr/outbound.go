@@ -57,6 +57,8 @@ type nostrOutbound struct {
 	ctx context.Context
 	req warp.Requester
 	pub *Publisher
+	// inbound, when set, also watches every started user's Nostr followers.
+	inbound *nostrInbound
 
 	retry time.Duration
 
@@ -104,6 +106,9 @@ func (o *nostrOutbound) start(owner string) {
 	o.started[owner] = true
 	warp.NetLog(o.pub.network).Infof("nostr: publishing %s", owner)
 	go newNostrPostPoller(o.req, o.pub, owner).run(o.ctx)
+	if o.inbound != nil {
+		go o.inbound.add(owner)
+	}
 }
 
 type nostrPostPoller struct {
