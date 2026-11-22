@@ -136,7 +136,7 @@ func TestNostrInboundFollowAndUnfollow(t *testing.T) {
 	}
 }
 
-func TestNostrInboundSkipsOptedOutAndOwnKeys(t *testing.T) {
+func TestNostrInboundSkipsLockedAndOwnKeys(t *testing.T) {
 	nodes := &inboundNodes{}
 	in, fx := newTestInbound(t, nodes, aliceULID, carolULID)
 	alice := fx.pk(t, aliceULID)
@@ -144,7 +144,7 @@ func TestNostrInboundSkipsOptedOutAndOwnKeys(t *testing.T) {
 
 	in.onEvent(followList(nostrtest.NewKey().PK, 10, carol))
 	if calls := nodes.take(); len(calls) != 0 {
-		t.Fatalf("an opted-out user got %+v", calls)
+		t.Fatalf("a locked user got %+v", calls)
 	}
 	in.onEvent(followList(fx.pk(t, bobULID), 10, alice))
 	if calls := nodes.take(); len(calls) != 0 {

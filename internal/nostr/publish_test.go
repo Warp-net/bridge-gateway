@@ -68,8 +68,8 @@ func consenting(id string) warp.User {
 	return warp.User{Id: id}
 }
 
-func optedOut(id string) warp.User {
-	return warp.User{Id: id, Metadata: map[string]string{nostrConsentKey: nostrConsentDeny}}
+func locked(id string) warp.User {
+	return warp.User{Id: id, Locked: true}
 }
 
 // fakeNodeKeys stands in for users' nodes sending their bridge keys: one per
@@ -104,7 +104,7 @@ func newPublishFixture(t *testing.T) *publishFixture {
 	home := &fakeHome{users: map[string]warp.User{
 		aliceULID: consenting(aliceULID),
 		bobULID:   consenting(bobULID),
-		carolULID: optedOut(carolULID),
+		carolULID: locked(carolULID),
 	}, follows: map[string][]string{}}
 	keys := testKeys(t)
 	b := testNostrBridge(t, relay)
@@ -182,14 +182,9 @@ func TestNostrKeyDerivation(t *testing.T) {
 func TestNostrConsent(t *testing.T) {
 	fx := newPublishFixture(t)
 	if !fx.pub.consents(aliceULID) || fx.pub.consents(carolULID) || fx.pub.consents("01KZZZZZZZZZZZZZZZZZZZZZZZ") {
-		t.Fatal("everyone consents but users who opted out at sign-up")
+		t.Fatal("everyone the node knows is published but locked accounts")
 	}
-	fx.home.users[aliceULID] = optedOut(aliceULID)
-	fx.pub.actors.Purge()
-	if fx.pub.consents(aliceULID) {
-		t.Fatal("an opt-out is honoured, however late it is read")
-	}
-	fx.home.users[aliceULID] = warp.User{Id: aliceULID, Locked: true}
+	fx.home.users[aliceULID] = locked(aliceULID)
 	fx.pub.actors.Purge()
 	if fx.pub.consents(aliceULID) {
 		t.Fatal("a locked account is never published")
