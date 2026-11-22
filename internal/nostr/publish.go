@@ -30,6 +30,7 @@ package nostr
 import (
 	"context"
 	"encoding/json"
+	"regexp"
 	"strings"
 	"time"
 
@@ -226,10 +227,10 @@ func (p *Publisher) Quote(ev warp.Tweet) {
 	if !ok {
 		return
 	}
-	content := strings.TrimSpace(ev.Text + "\n\nnostr:" + encodeNevent(note.ID, note.PubKey))
-	p.send(ctx, sk, nostrEvent{Kind: KindNote, Content: content, Tags: [][]string{
-		{"q", note.ID, "", note.PubKey}, {"p", note.PubKey}, p.proxyTag(ev.UserId, ev.Id),
-	}}, p.bridge.authorRelays(ctx, note.PubKey))
+	text, mentions := nostrMentions(ev.Text)
+	content := strings.TrimSpace(text + "\n\nnostr:" + encodeNevent(note.ID, note.PubKey))
+	tags := append([][]string{{"q", note.ID, "", note.PubKey}, {"p", note.PubKey}, p.proxyTag(ev.UserId, ev.Id)}, mentions...)
+	p.send(ctx, sk, nostrEvent{Kind: KindNote, Content: content, Tags: tags}, p.bridge.authorRelays(ctx, note.PubKey))
 }
 
 // Reply publishes a Warpnet reply to a Nostr note as a NIP-10 kind 1.
@@ -255,8 +256,10 @@ func (p *Publisher) Reply(ev warp.Tweet) {
 	if root != parent.ID {
 		tags = append(tags, []string{"e", parent.ID, "", "reply", parent.PubKey})
 	}
+	text, mentions := nostrMentions(ev.Text)
 	tags = append(tags, []string{"p", parent.PubKey}, p.proxyTag(ev.UserId, ev.Id))
-	p.send(ctx, sk, nostrEvent{Kind: KindNote, Content: ev.Text, Tags: tags}, p.bridge.authorRelays(ctx, parent.PubKey))
+	tags = append(tags, mentions...)
+	p.send(ctx, sk, nostrEvent{Kind: KindNote, Content: text, Tags: tags}, p.bridge.authorRelays(ctx, parent.PubKey))
 }
 
 // DeleteReply asks relays to drop the user's reply that carried this tweet.
@@ -350,6 +353,7 @@ func (p *Publisher) Follow(actor, handle string, undo bool) {
 		tags = append(tags, []string{"p", changed})
 	}
 	p.send(ctx, sk, nostrEvent{Kind: kindFollowList, Tags: tags}, p.bridge.authorRelays(ctx, changed))
+	p.bridge.counts.Remove(changed) // the profile's follower count is stale now
 }
 
 // PublishPost publishes a consenting user's own top-level post as a kind 1.
@@ -365,7 +369,7 @@ func (p *Publisher) PublishPost(owner string, t warp.Tweet) {
 	if !ok {
 		return
 	}
-	content := strings.TrimSpace(t.Text)
+	content, mentions := nostrMentions(strings.TrimSpace(t.Text))
 	if t.Poll != nil {
 		for _, o := range t.Poll.Options {
 			content += "\n• " + o
@@ -374,7 +378,7 @@ func (p *Publisher) PublishPost(owner string, t warp.Tweet) {
 	for _, key := range t.ImageKeys {
 		content += "\n" + p.mediaURL(owner, key)
 	}
-	tags := [][]string{p.proxyTag(owner, t.Id)}
+	tags := append([][]string{p.proxyTag(owner, t.Id)}, mentions...)
 	if t.QuotedTweetId != nil && isNostrEventID(*t.QuotedTweetId) {
 		if note, ok := p.target(ctx, *t.QuotedTweetId); ok {
 			content += "\n\nnostr:" + encodeNevent(note.ID, note.PubKey)
@@ -464,4 +468,27 @@ func (p *Publisher) mediaURL(owner, key string) string {
 // sponsored; replies, retweets and paid content never leave as posts.
 func nostrPublishablePost(t warp.Tweet, owner string) bool {
 	return warp.PublishableTweet(t, owner) && t.Price == nil && !t.IsSponsored()
+}
+
+var nostrMentionRe = regexp.MustCompile(`@(npub1[02-9ac-hj-np-z]{58})@` + regexp.QuoteMeta(nostrHandleHost) + `\b`)
+
+// nostrMentions turns Warpnet's "@npub…@nostr.com" mentions into NIP-27
+// "nostr:npub…" references and returns a p tag per mentioned key, which is
+// what makes Nostr clients notify the account.
+func nostrMentions(text string) (string, [][]string) {
+	var tags [][]string
+	seen := map[string]bool{}
+	text = nostrMentionRe.ReplaceAllStringFunc(text, func(m string) string {
+		npub := nostrMentionRe.FindStringSubmatch(m)[1]
+		pk, ok := decodeNpub(npub)
+		if !ok {
+			return m
+		}
+		if !seen[pk] {
+			seen[pk] = true
+			tags = append(tags, []string{"p", pk})
+		}
+		return "nostr:" + npub
+	})
+	return text, tags
 }

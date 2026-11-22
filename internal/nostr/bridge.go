@@ -523,11 +523,13 @@ func (b *Bridge) GetTweetStats(ctx context.Context, id string) (event.TweetStats
 }
 
 // trustedReferrers collects the events of the given kinds that reference id
-// and come from trusted authors.
+// and come from trusted authors or from Warpnet users, whose own events are
+// otherwise dropped as coming back from the gateway.
 func (b *Bridge) trustedReferrers(ctx context.Context, wg *sync.WaitGroup, relays []string, id string, out *[]nostrEvent, kinds ...int) {
 	defer wg.Done()
 	for _, ev := range b.relays.fetch(ctx, relays, nostrFilter{Kinds: kinds, Tags: map[string][]string{"e": {id}}, Limit: nostrBoundedFetch}) {
-		if b.isTrusted(ev.PubKey) && !droppedNostrEvent(ev, b.selfHost) {
+		_, own := b.keys.owner(ev.PubKey)
+		if own || (b.isTrusted(ev.PubKey) && !droppedNostrEvent(ev, b.selfHost)) {
 			*out = append(*out, ev)
 		}
 	}

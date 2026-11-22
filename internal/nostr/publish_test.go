@@ -28,6 +28,7 @@ resulting from the use or misuse of this software.
 package nostr
 
 import (
+	"context"
 	"crypto/sha256"
 	"strings"
 	"testing"
@@ -373,4 +374,41 @@ func (testLinks) ProfileUser(rawURL string) (string, bool) {
 	}
 	userID, _, _ := strings.Cut(rest, "/")
 	return userID, userID != ""
+}
+
+func TestNostrPublishMentionsAsReferences(t *testing.T) {
+	fx := newPublishFixture(t)
+	mentioned := nostrtest.NewKey().PK
+	handle := Handle(mentioned)
+	npub, _, _ := strings.Cut(handle, "@")
+	fx.pub.PublishPost(aliceULID, warp.Tweet{Id: "TWEET2", RootId: "TWEET2", UserId: aliceULID, Text: "hi @" + handle + ", and @" + handle})
+
+	published := fx.relay.Published(fx.pk(t, aliceULID), KindNote)
+	if len(published) != 1 {
+		t.Fatalf("published = %d notes, want 1", len(published))
+	}
+	ev := published[0]
+	if want := "hi nostr:" + npub + ", and nostr:" + npub; ev.Content != want {
+		t.Fatalf("content = %q, want %q", ev.Content, want)
+	}
+	if !tagged(ev, "p", mentioned) {
+		t.Fatalf("no p tag for the mentioned account: %v", ev.Tags)
+	}
+}
+
+func TestNostrStatsCountWarpnetReplies(t *testing.T) {
+	fx := newPublishFixture(t)
+	note := fx.note.ID.Hex()
+	parent := note
+	fx.pub.Reply(warp.Tweet{Id: "REPLY1", RootId: note, ParentId: &parent, UserId: aliceULID, Text: "a warpnet reply"})
+	if len(fx.relay.Published(fx.pk(t, aliceULID), KindNote)) != 1 {
+		t.Fatal("the reply was not published")
+	}
+	stats, err := fx.pub.bridge.GetTweetStats(context.Background(), note)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.RepliesCount != 1 {
+		t.Fatalf("replies = %d, want the Warpnet user's reply counted", stats.RepliesCount)
+	}
 }
