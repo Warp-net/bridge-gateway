@@ -42,12 +42,9 @@ import (
 // nostrPublisher writes a Warpnet user's actions on Nostr notes to Nostr,
 // signed with the user's derived key: replies, quotes, reactions, reposts,
 // their undos, deleted replies and the kind 3 follow list. Nothing is
-// published for a user who has not consented at sign-up or whose account is
-// locked; sponsored content never leaves Warpnet.
+// published for a locked account; sponsored content never leaves Warpnet.
 
 const (
-	nostrConsentKey      = "nostr"
-	nostrConsentDeny     = "deny"
 	nostrActorTTL        = time.Minute
 	nostrPublishTimeout  = time.Minute
 	nostrPublishInFlight = 16
@@ -89,7 +86,7 @@ func newPublisher(keys *Keys, bridge *Bridge, home HomeReader, network string, l
 }
 
 // consents reports whether userID's actions may be published to Nostr: on
-// unless the user opted out at sign-up.
+// for every user the node knows whose account is not locked.
 func (p *Publisher) consents(userID string) bool {
 	u, ok := p.actors.Get(userID)
 	if !ok {
@@ -98,7 +95,7 @@ func (p *Publisher) consents(userID string) bool {
 		}
 		p.actors.Add(userID, u)
 	}
-	return u.Metadata[nostrConsentKey] != nostrConsentDeny && !u.Locked
+	return !u.Locked
 }
 
 // signer is the key of a consenting user.

@@ -98,6 +98,6 @@ your gateway and hands it the key that signs their Nostr posts.
 | `GATEWAY_LOGS_ADDR` | extra plain-HTTP listener for `/logs` and `/debug/pprof`, e.g. `:4080` | unset |
 
 The gateway listens for Warpnet on TCP 4040 (`warpnet`) and 4041 (`testnet`);
-`--network host` keeps those reachable from other nodes. Users whose actions
-the gateway publishes to Nostr are the ones who did not opt out at sign-up; it
+`--network host` keeps those reachable from other nodes. The gateway publishes
+the actions of every Warpnet user whose account is not locked to Nostr; it
 serves their NIP-05 names at `https://<host>/.well-known/nostr.json`.

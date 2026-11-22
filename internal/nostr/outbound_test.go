@@ -160,7 +160,7 @@ func TestNostrPostPollerPublishesPostsEditsAndDeletes(t *testing.T) {
 
 func TestNostrOutboundStartsConsentingUsersOnce(t *testing.T) {
 	fx := newPublishFixture(t)
-	feed := &fakeFeed{users: []warp.User{{Id: aliceULID}, optedOut(carolULID), {Id: "bob@mastodon.social", Network: warp.MastodonNetwork}}}
+	feed := &fakeFeed{users: []warp.User{{Id: aliceULID}, locked(carolULID), {Id: "bob@mastodon.social", Network: warp.MastodonNetwork}}}
 	o := newOutbound(testCtx(t), feed, fx.pub)
 	o.scan(warp.DefaultOwnerHandle)
 	o.scan(warp.DefaultOwnerHandle)
