@@ -271,11 +271,48 @@ func nostrNoteToTweet(ev nostrEvent) (warp.Tweet, bool) {
 			t.ParentUserId = &pu
 		}
 	}
-	if q := tagValue(ev, "q"); isNostrEventID(q) {
-		t.QuotedTweetId = &q
-	}
+	text = quoteInto(&t, ev, text)
 	t.Text = truncateUTF8(strings.TrimSpace(text), nostrTextLimit)
 	return t, t.Text != "" || len(t.ImageKeys) > 0
+}
+
+var eventRefRe = regexp.MustCompile(`nostr:((?:nevent|note)1[02-9ac-hj-np-z]+)`)
+
+// quoteInto reads the quoted note from the q tag or, for clients that write
+// it only into the text, from a nostr:nevent reference naming its author, and
+// drops the references to it from the text: Warpnet shows the quote as a card,
+// which needs the author to load.
+func quoteInto(t *warp.Tweet, ev nostrEvent, text string) string {
+	var id, author string
+	for _, tag := range ev.Tags {
+		if len(tag) >= 2 && tag[0] == "q" && isNostrEventID(tag[1]) {
+			id = tag[1]
+			if len(tag) >= 4 && hex64.MatchString(tag[3]) {
+				author = tag[3]
+			}
+			break
+		}
+	}
+	text = eventRefRe.ReplaceAllStringFunc(text, func(m string) string {
+		refID, refAuthor, ok := decodeEventRef(strings.TrimPrefix(m, "nostr:"))
+		if !ok || (id == "" && refAuthor == "") || (id != "" && refID != id) {
+			return m
+		}
+		id = refID
+		if author == "" {
+			author = refAuthor
+		}
+		return ""
+	})
+	if id == "" {
+		return text
+	}
+	t.QuotedTweetId = &id
+	if author != "" {
+		u := Handle(author)
+		t.QuotedUserId = &u
+	}
+	return text
 }
 
 // parentAuthor finds the parent's author: the pubkey on the parent's e tag,
