@@ -586,6 +586,20 @@ func decodeNpub(npub string) (string, bool) {
 	return pk.Hex(), true
 }
 
+// decodeEventRef reads a NIP-19 note1 or nevent1 reference; author is empty
+// when the reference does not name one.
+func decodeEventRef(ref string) (id, author string, ok bool) {
+	_, v, err := nip19.Decode(ref)
+	ptr, isPtr := v.(nostr.EventPointer)
+	if err != nil || !isPtr {
+		return "", "", false
+	}
+	if ptr.Author != (nostr.PubKey{}) {
+		author = ptr.Author.Hex()
+	}
+	return ptr.ID.Hex(), author, true
+}
+
 func dedupeStrings(in []string) []string {
 	seen := make(map[string]bool, len(in))
 	out := make([]string, 0, len(in))

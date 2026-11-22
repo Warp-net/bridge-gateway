@@ -30,17 +30,19 @@ package nostr
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/Warp-net/bridge-gateway/internal/warp"
 )
 
-// nostrInbound delivers Nostr follows of consenting Warpnet users to their
-// nodes, as the fediverse inbox does for Mastodon: a kind 3 list naming a
-// user's key is a follow, the author's next list without it an unfollow. The
-// followers already stored on a node are read back when its user is added, so
-// the gateway keeps no state of its own.
+// nostrInbound delivers Nostr follows and replies of consenting Warpnet users
+// to their nodes, as the fediverse inbox does for Mastodon: a kind 3 list
+// naming a user's key is a follow, the author's next list without it an
+// unfollow, and a kind 1 whose parent is the user's published tweet a reply.
+// The followers already stored on a node are read back when its user is
+// added, so the gateway keeps no state of its own.
 
 const (
 	nostrInboundMaxKeys     = 1000
@@ -170,9 +172,10 @@ func (in *nostrInbound) keys() (owners, followers []string) {
 	return owners, followers
 }
 
-// Run keeps two subscriptions on the default relays: lists naming a watched
-// user, which bring follows, and the known followers' lists, which bring
-// unfollows. Both are re-opened whenever either set changes.
+// Run keeps three subscriptions on the default relays: lists naming a watched
+// user, which bring follows, the known followers' lists, which bring
+// unfollows, and new notes tagging a watched user, which bring replies. All
+// are re-opened whenever either set changes.
 func (in *nostrInbound) Run(ctx context.Context) {
 	for {
 		owners, followers := in.keys()
@@ -182,6 +185,9 @@ func (in *nostrInbound) Run(ctx context.Context) {
 			go in.pub.bridge.relays.subscribe(subCtx, relays, nostrFilter{
 				Kinds: []int{kindFollowList}, Tags: map[string][]string{"p": owners}, Since: nostrInboundStoredLists,
 			}, in.onEvent)
+			go in.pub.bridge.relays.subscribe(subCtx, relays, nostrFilter{
+				Kinds: []int{KindNote}, Tags: map[string][]string{"p": owners},
+			}, in.onReply)
 		}
 		if len(followers) > 0 {
 			go in.pub.bridge.relays.subscribe(subCtx, relays, nostrFilter{
@@ -280,4 +286,63 @@ func (in *nostrInbound) deliver(owner, follower string, undo bool) bool {
 	}
 	warp.NetLog(in.pub.network).Infof("nostr: delivered %s of %s by %s", route, owner, follower)
 	return true
+}
+
+// onReply delivers a reply to a watched user's published tweet. Deeper
+// replies in the thread tag the user too but answer someone else, so they
+// stay on Nostr.
+func (in *nostrInbound) onReply(ev nostrEvent) {
+	if _, own := in.pub.keys.owner(ev.PubKey); own {
+		return
+	}
+	root, parent := threadRefs(ev)
+	if parent == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), nostrPublishTimeout)
+	defer cancel()
+	owner, tweetID, ok := in.warpnetTweet(ctx, parent)
+	if !ok || !in.pub.consents(owner) {
+		return
+	}
+	t, ok := nostrNoteToTweet(ev)
+	if !ok {
+		return
+	}
+	t.ParentId, t.ParentUserId, t.RootId = &tweetID, &owner, tweetID
+	if root != parent {
+		t.RootId = root
+		if _, rootTweet, ok := in.warpnetTweet(ctx, root); ok {
+			t.RootId = rootTweet
+		}
+	}
+	ts := []warp.Tweet{t}
+	in.pub.bridge.names(ctx, ts)
+	bt, err := in.req.RequestUser(owner, warp.RoutePostReply, ts[0])
+	if err == nil {
+		err = warp.NodeResponseError(bt)
+	}
+	if err != nil {
+		warp.NetLog(in.pub.network).Warnf("nostr: delivering reply %s to %s: %v", ev.ID, owner, err)
+		return
+	}
+	warp.NetLog(in.pub.network).Infof("nostr: delivered reply %s to %s", ev.ID, owner)
+}
+
+// warpnetTweet names the tweet behind a watched user's note: the gateway
+// published it with the tweet's status url as its proxy tag.
+func (in *nostrInbound) warpnetTweet(ctx context.Context, id string) (owner, tweetID string, ok bool) {
+	note, ok := in.pub.target(ctx, id)
+	if !ok {
+		return "", "", false
+	}
+	in.mu.Lock()
+	owner, ok = in.owners[note.PubKey]
+	in.mu.Unlock()
+	proxy, protocol := proxiedFrom(note)
+	tweetID = proxy[strings.LastIndex(proxy, "/")+1:]
+	if !ok || protocol != "web" || tweetID == "" || proxy != in.pub.statusURL(owner, tweetID) {
+		return "", "", false
+	}
+	return owner, tweetID, true
 }

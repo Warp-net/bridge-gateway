@@ -418,3 +418,19 @@ func TestNostrCountSkipsARelayThatDoesNotCount(t *testing.T) {
 		t.Fatalf("took %s, want the relay that never counted skipped", took)
 	}
 }
+
+func TestNostrNoteQuotesANeventReference(t *testing.T) {
+	author, quoted := nostrtest.NewKey().PK, hexID('b')
+	ev := nostrEvent{ID: hexID('a'), PubKey: nostrtest.NewKey().PK, Kind: KindNote,
+		Content: "look at this nostr:" + encodeNevent(quoted, author)}
+	tw, ok := nostrNoteToTweet(ev)
+	if !ok || tw.Text != "look at this" || tw.QuotedTweetId == nil || *tw.QuotedTweetId != quoted ||
+		tw.QuotedUserId == nil || *tw.QuotedUserId != Handle(author) {
+		t.Fatalf("tweet = %+v", tw)
+	}
+
+	ev.Content = "see nostr:" + encodeNevent(quoted, "")
+	if tw, _ := nostrNoteToTweet(ev); tw.QuotedTweetId != nil || tw.Text != ev.Content {
+		t.Fatalf("a reference without an author became a quote card: %+v", tw)
+	}
+}

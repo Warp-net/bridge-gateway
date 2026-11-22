@@ -32,6 +32,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Warp-net/bridge-gateway/internal/nostr/nostrtest"
 	"github.com/Warp-net/bridge-gateway/internal/warp"
@@ -43,11 +44,12 @@ type followCall struct {
 }
 
 // inboundNodes stands in for the watched users' nodes: they list stored
-// followers and record follow deliveries.
+// followers and record follow and reply deliveries.
 type inboundNodes struct {
 	mu        sync.Mutex
 	followers map[string][]string
 	calls     []followCall
+	replies   []warp.Tweet
 	down      bool
 }
 
@@ -61,6 +63,10 @@ func (n *inboundNodes) RequestUser(userID, route string, payload any) ([]byte, e
 	}
 	if n.down {
 		return nil, errors.New("node is offline")
+	}
+	if reply, ok := payload.(warp.Tweet); ok && route == warp.RoutePostReply {
+		n.replies = append(n.replies, reply)
+		return json.Marshal(reply)
 	}
 	n.calls = append(n.calls, followCall{route: route, ev: payload.(warp.NewFollowEvent)})
 	return json.Marshal(struct{}{})
@@ -201,5 +207,40 @@ func TestNostrInboundReachesAUserAddedLater(t *testing.T) {
 	calls := nodes.take()
 	if len(calls) != 1 || calls[0].ev.FollowingId != bobULID {
 		t.Fatalf("calls = %+v, want only bob's follow", calls)
+	}
+}
+
+func TestNostrInboundDeliversADirectReply(t *testing.T) {
+	nodes := &inboundNodes{}
+	in, fx := newTestInbound(t, nodes, aliceULID)
+	alice := fx.pk(t, aliceULID)
+	fx.pub.PublishPost(aliceULID, warp.Tweet{Id: "TWEET1", RootId: "TWEET1", UserId: aliceULID, Text: "hello nostr"})
+	published := fx.relay.Published(alice, KindNote)
+	if len(published) != 1 {
+		t.Fatalf("published = %d notes, want 1", len(published))
+	}
+	post := published[0].ID.Hex()
+	fan := nostrtest.NewKey()
+	now := time.Now().Unix()
+
+	reply := fromLibEvent(fan.Sign(t, KindNote, "nice post", now, []string{"e", post, "", "root"}, []string{"p", alice}))
+	in.onReply(reply)
+	if len(nodes.replies) != 1 {
+		t.Fatalf("replies = %+v, want one", nodes.replies)
+	}
+	got := nodes.replies[0]
+	if got.Id != reply.ID || got.UserId != Handle(fan.PK) || got.Text != "nice post" ||
+		got.ParentId == nil || *got.ParentId != "TWEET1" || got.ParentUserId == nil || *got.ParentUserId != aliceULID ||
+		got.RootId != "TWEET1" {
+		t.Fatalf("reply = %+v", got)
+	}
+
+	nodes.replies = nil
+	stranger := fromLibEvent(fan.Sign(t, KindNote, "answering someone else", now, []string{"e", fx.note.ID.Hex(), "", "root"}, []string{"p", alice}))
+	in.onReply(stranger)
+	mention := fromLibEvent(fan.Sign(t, KindNote, "just a mention", now, []string{"p", alice}))
+	in.onReply(mention)
+	if len(nodes.replies) != 0 {
+		t.Fatalf("a note that does not answer alice's tweet is delivered: %+v", nodes.replies)
 	}
 }
