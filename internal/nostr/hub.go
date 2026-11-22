@@ -128,7 +128,11 @@ func (h *Hub) Run(ctx context.Context, scanUser string) {
 	for _, network := range h.networks {
 		go h.live.RunScanner(ctx, network.node, scanUser)
 		if network.pub != nil {
-			go newOutbound(ctx, network.node, network.pub).RunScanner(scanUser)
+			in := newInbound(network.node, network.pub)
+			go in.Run(ctx)
+			out := newOutbound(ctx, network.node, network.pub)
+			out.inbound = in
+			go out.RunScanner(scanUser)
 		}
 	}
 }
